@@ -1,0 +1,28 @@
+# Tokens come from .env (read automatically by compose). Rotate with `make keys`.
+services:
+  target:
+    build: { context: ., target: target }
+    environment:
+      TARGET_TOKEN: ${TARGET_TOKEN:?TARGET_TOKEN missing - see .env}
+    ports: ["${TARGET_PORT:-8081}:8081"]
+    healthcheck:
+      test: ["CMD", "/target", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  client:
+    build: { context: ., target: client }
+    environment:
+      TARGET_URL: http://target:8081
+      TARGET_TOKEN: ${TARGET_TOKEN:?TARGET_TOKEN missing - see .env}
+      CLIENT_API_KEY: ${CLIENT_API_KEY:?CLIENT_API_KEY missing - see .env}
+    ports: ["${CLIENT_PORT:-8080}:8080"]
+    depends_on:
+      target: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/client", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speed Test</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #fff; --fg: #1d1d1f; --muted: #6b6b70;
+    --line: #e3e3e0; --accent: #2563eb; --bad: #c0392b;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151517; --card: #1f1f22; --fg: #ededee; --muted: #9a9aa0; --line: #33333a; --accent: #6b9bff; --bad: #ff6b5b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 22px; margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input { flex: 1; min-width: 180px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+  button { padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .err { color: var(--bad); }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .metric .label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .metric .value { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .metric .unit { font-size: 14px; color: var(--muted); margin-left: 4px; }
+  .metric .sub { font-size: 12px; color: var(--muted); }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 12px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr[data-id] { cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Speed Test</h1>
+
+  <div class="card">
+    <div class="row">
+      <input id="key" type="password" placeholder="Client API key (CLIENT_API_KEY from .env)" autocomplete="off">
+      <button id="start">Start test</button>
+    </div>
+    <div id="status" class="muted" style="margin-top:10px">Idle.</div>
+    <div class="bar"><div id="bar"></div></div>
+  </div>
+
+  <div class="card metrics">
+    <div class="metric"><div class="label">Latency</div><div><span class="value" id="lat">–</span><span class="unit">ms</span></div><div class="sub" id="latSub">&nbsp;</div></div>
+    <div class="metric"><div class="label">Download</div><div><span class="value" id="down">–</span><span class="unit">Mbit/s</span></div><div class="sub" id="downSub">&nbsp;</div></div>
+    <div class="metric"><div class="label">Upload</div><div><span class="value" id="up">–</span><span class="unit">Mbit/s</span></div><div class="sub" id="upSub">&nbsp;</div></div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">Recent tests</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Started</th><th>Status</th><th>Latency</th><th>Download</th><th>Upload</th></tr></thead>
+        <tbody id="history"><tr><td colspan="5" class="muted">Enter the API key to load history.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const keyInput = $('key');
+try { keyInput.value = localStorage.getItem('speedtest.key') || ''; } catch {}
+keyInput.addEventListener('change', () => {
+  try { localStorage.setItem('speedtest.key', keyInput.value); } catch {}
+  loadHistory();
+});
+
+async function api(method, path) {
+  const res = await fetch(path, { method, headers: { Authorization: 'Bearer ' + keyInput.value } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+const fmt = (v, d = 1) => v == null ? '–' : v.toFixed(d);
+const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB';
+
+function render(t) {
+  $('lat').textContent = t.latency ? fmt(t.latency.median_ms, 2) : '–';
+  $('latSub').textContent = t.latency ? `min ${fmt(t.latency.min_ms, 2)} · p95 ${fmt(t.latency.p95_ms, 2)} · jitter ${fmt(t.latency.jitter_ms, 2)}` : ' ';
+  for (const [phase, el] of [['download', 'down'], ['upload', 'up']]) {
+    const r = t[phase], live = t.progress && t.progress.phase === phase ? t.progress : null;
+    $(el).textContent = r ? fmt(r.mbps) : live ? fmt(live.mbps) : '–';
+    $(el + 'Sub').textContent = r ? `${r.streams} streams · ${fmtBytes(r.measured_bytes)} in ${fmt(r.measured_seconds)}s` : live ? 'measuring…' : ' ';
+  }
+  const p = t.progress;
+  $('bar').style.width = t.status !== 'running' ? '0' : p ? (100 * p.elapsed_s / p.duration_s) + '%' : '0';
+  const s = $('status');
+  s.className = t.status === 'failed' ? 'err' : 'muted';
+  s.textContent = t.status === 'running' ? `Running ${t.phase || ''}… (test ${t.id} → ${t.target})`
+    : t.status === 'failed' ? `Failed: ${t.error}` : `Done (test ${t.id} → ${t.target})`;
+}
+
+async function poll(id) {
+  for (;;) {
+    const t = await api('GET', '/api/tests/' + id);
+    render(t);
+    if (t.status !== 'running') return;
+    await new Promise(r => setTimeout(r, 400));
+  }
+}
+
+$('start').addEventListener('click', async () => {
+  $('start').disabled = true;
+  try {
+    const t = await api('POST', '/api/tests');
+    render(t);
+    await poll(t.id);
+  } catch (e) {
+    $('status').className = 'err';
+    $('status').textContent = e.message;
+  } finally {
+    $('start').disabled = false;
+    loadHistory();
+  }
+});
+
+async function loadHistory() {
+  if (!keyInput.value) return;
+  const tbody = $('history');
+  try {
+    const tests = await api('GET', '/api/tests');
+    tbody.replaceChildren(...tests.map(t => {
+      const tr = document.createElement('tr');
+      tr.dataset.id = t.id;
+      for (const v of [new Date(t.started_at).toLocaleTimeString(), t.status,
+        t.latency ? fmt(t.latency.median_ms, 2) + ' ms' : '–',
+        t.download ? fmt(t.download.mbps) + ' Mbit/s' : '–',
+        t.upload ? fmt(t.upload.mbps) + ' Mbit/s' : '–']) {
+        const td = document.createElement('td'); td.textContent = v; tr.append(td);
+      }
+      tr.addEventListener('click', () => render(t));
+      return tr;
+    }));
+    if (!tests.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">No tests yet.</td></tr>';
+  } catch (e) {
+    tbody.innerHTML = '';
+    const tr = document.createElement('tr'), td = document.createElement('td');
+    td.colSpan = 5; td.className = 'err'; td.textContent = e.message;
+    tr.append(td); tbody.append(tr);
+  }
+}
+loadHistory();
+</script>
+</body>
+</html>
